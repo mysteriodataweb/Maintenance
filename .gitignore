@@ -1,0 +1,83 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+# Environnements virtuels
+# =========================
+maintVenv/
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# =========================
+# Tests et coverage
+# =========================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# =========================
+# Secrets et variables d'environnement
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Système et éditeurs
+# =========================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# =========================
+# Données brutes et traitées
+# Regenerables via : python -m src.download
+# (telecharge C-MAPSS dans dataset/raw puis preprocess.ipynb
+#  ecrit les CSV dans data/processed)
+# =========================
+dataset/raw/*.txt
+dataset/raw/*.zip
+dataset/raw/*.pdf
+data/processed/*.csv
+*.parquet
+
+# =========================
+# Modeles serialises (.joblib)
+# Regenerables en executant notebooks/preprocess.ipynb
+# random_forest_FD001.joblib pese ~233 Mo : depasse la limite
+# de 100 Mo par fichier de GitHub, il ne peut pas etre versionne.
+# =========================
+models/*.joblib
+models/*.pkl
+
+# =========================
+# Artefacts de streaming / logs
+# =========================
+logs/
+*.log
+outputs/
+reports/

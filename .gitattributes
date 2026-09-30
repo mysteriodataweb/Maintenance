@@ -1,0 +1,33 @@
+# Normalisation des fins de ligne : LF dans le depot, natif dans le clone.
+# Evite que chaque contributeur Windows fasse diverger l'ensemble du depot
+# sur des Differences qui ne portent que sur \r\n.
+
+* text=auto eol=lf
+
+# Fichiers Windows : CRLF obligatoire.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Scripts et sources : LF.
+*.py   text diff=python
+*.md   text diff=markdown
+*.txt  text
+*.yml  text
+*.yaml text
+*.json text
+*.cfg  text
+*.toml text
+*.csv  text
+
+# Notebooks : le JSON doit rester sur une seule ligne, le diff devient lisible.
+*.ipynb text eol=lf
+
+# Donnees et modeles : jamais normalises, toujours binaires.
+*.joblib binary
+*.pkl    binary
+*.parquet binary
+*.zip    binary
+*.png    binary
+*.jpg    binary
+*.pdf    binary

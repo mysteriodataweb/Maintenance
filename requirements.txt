@@ -1,0 +1,34 @@
+# =========================
+# Donnees et calcul
+# =========================
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# =========================
+# Apprentissage automatique
+# =========================
+scikit-learn>=1.3.0
+joblib>=1.3.0
+
+# =========================
+# Visualisation
+# =========================
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# =========================
+# Streaming Kafka (pipeline temps reel)
+# =========================
+kafka-python>=2.0.2
+
+# =========================
+# Telechargement du jeu de donnees
+# =========================
+requests>=2.31.0
+
+# =========================
+# Exploration interactive
+# =========================
+jupyterlab>=4.0.0
+ipykernel>=6.25.0
