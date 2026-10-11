@@ -10,45 +10,49 @@ utilisé par le projet.
 **C-MAPSS** (*Commercial Modular Aero-Propulsion System Simulation*),
 Prognostics Center of Excellence, NASA Ames Research Center.
 
-Il simule la dégradation d'un moteur à turbopropulseur composé de trois modules
-principaux — **fan**, **core** (compresseur + chambre de combustion +
-turbine), **LPC** (compresseur de basse pression) — sous conditions
+Il simule la dégradation d'un turboréacteur double flux (*turbofan*) composé
+de cinq modules tournants — **soufflante** (fan), **compresseur basse
+pression** (LPC), **compresseur haute pression** (HPC), **turbine haute
+pression** (HPT) et **turbine basse pression** (LPT) — sous conditions
 d'exploitation et de défaillance variées.
 
-Le jeu est censé reproduire les trois exigences d'un problème de maintenance
-réelle :
+Le jeu reproduit trois caractéristiques d'un problème de maintenance réelle :
 
 - **Dégradation progressive**, non brutale et non linéaire.
-- **Variabilité inter-parc**, des moteurs identiques se dégradient à des
-  vitesses différentes, sans cause observable unique.
-- **Rareté des données de panne**, un moteur de chaque série atteint son état
-  terminal, la plupart n'ont pas de contrepartie.
+- **Variabilité inter-parc** : des moteurs identiques démarrent avec une usure
+  initiale différente et se dégradent à des vitesses différentes.
+- **Historiques tronqués** : en entraînement, chaque moteur est suivi jusqu'à
+  la panne ; en test, la série s'arrête avant la panne et il faut estimer le
+  nombre de cycles restants.
 
-Le téléchargement est assuré par `python -m src.download` (voir
-[STREAMING.md](STREAMING.md) pour le détail des miroirs).
+Le téléchargement est assuré par `python -m src.download` (les miroirs sont
+listés dans `src/download.py`).
 
 ---
 
 ## 2. Les quatre sous-ensembles
 
-| Sous-ensemble | Moteurs | Régimes de fonctionnement | Conditions |
+| Sous-ensemble | Moteurs (train / test) | Régimes de fonctionnement | Modes de défaillance |
 | --- | --- | --- | --- |
-| **FD001** | 100 | 1 | Altitude et vitesse constantes |
-| FD002 | 260 | 6 | Six couples altitude/vitesse |
-| FD003 | 100 | 1 | Altitude et vitesse constantes, 1/fan |
-| FD004 | 249 | 6 | Six couples altitude/vitesse, 2 fans |
+| **FD001** | 100 / 100 | 1 | 1 (HPC) |
+| FD002 | 260 / 259 | 6 | 1 (HPC) |
+| FD003 | 100 / 100 | 1 | 2 (HPC et soufflante) |
+| FD004 | 249 / 248 | 6 | 2 (HPC et soufflante) |
 
 **Le projet cible FD001.** C'est le sous-ensemble le plus simple : un seul
-régime, donc les réglages `setting_1..3` sont constants et les quatre
-capteurs à variance nulle sont identifiés sans ambiguïté.
+régime et un seul mode de défaillance. Les réglages `setting_1` et `setting_2`
+n'y varient que par un bruit infime autour d'un point de fonctionnement
+unique, et `setting_3` est constant.
 
-Les autres sous-ensembles ne sont pas interchangeables :
+Les quatre sous-ensembles ont le même schéma à 26 colonnes, mais ne sont pas
+interchangeables :
 
-- **FD002 et FD004** combinent six régimes. Les réglages ne sont plus
-  constants, et les capteurs constants de FD001 varient. La sélection de
-  capteurs doit être recalculée, pas recopiée.
-- **FD004** possède deux fans, donc deux fois plus de capteurs, et sa structure
-  de sensors n'est pas compatible telle quelle avec FD001.
+- **FD002 et FD004** combinent six régimes. Les réglages deviennent
+  informatifs, et les capteurs constants de FD001 varient avec le régime. La
+  sélection de capteurs doit être recalculée, pas recopiée, et les mesures
+  normalisées par régime.
+- **FD003 et FD004** ajoutent un second mode de défaillance (soufflante) :
+  les capteurs ne dérivent plus tous dans le même sens d'un moteur à l'autre.
 
 Passer à un autre sous-ensemble se fait par
 `MAINTENANCE_DATASET_ID=FD002`, à condition d'avoir réentraîné les modèles sur
@@ -60,32 +64,32 @@ ce sous-ensemble et recalculé la sélection de capteurs.
 
 | Fichier | Contenu |
 | --- | --- |
-| `train_FD00X.txt` | Données d'entraînement, tous les cycles de tous les moteurs |
-| `test_FD00X.txt` | Données de test, **uniquement le dernier cycle** de chaque moteur |
-| `RUL_FD00X.txt` | RUL de référence pour le test, une ligne par moteur, dans l'ordre de `unit_number` |
+| `train_FD00X.txt` | Données d'entraînement, tous les cycles de chaque moteur **jusqu'à la panne** |
+| `test_FD00X.txt` | Données de test, tous les cycles de chaque moteur jusqu'à un point d'arrêt **antérieur à la panne** |
+| `RUL_FD00X.txt` | RUL de référence au dernier cycle de test, une ligne par moteur, dans l'ordre de `unit_number` |
 
-### Pourquoi le test ne contient qu'un cycle
+### Ce que contient le test
 
-Le format officiel impose d'estimer la RUL à partir de la dernière observation
-seulement, sans accès à l'historique. C'est la contrainte la plus proche du cas
-réel : au moment de la décision, on dispose de l'historique accumulé, mais pas
-de la panne à venir.
+Le fichier de test fournit l'historique complet de chaque moteur jusqu'à son
+dernier cycle observé (de 31 à 303 cycles sur FD001). L'évaluation officielle
+porte sur **une seule prédiction par moteur**, celle du dernier cycle, comparée
+à `RUL_FD00X.txt`. C'est la situation réelle : au moment de la décision, on
+dispose de l'historique accumulé, mais pas de la panne à venir.
 
-Le pipeline Kafka de ce dépôt ne respecte pas cette contrainte : il reçoit les
-cycles un à un en flux et reconstruit son propre historique. C'est réaliste, et
-c'est pourquoi les features temporelles y sont indispensables — sans elles, un
-modèle ne voit qu'un instantané et ne peut rien anticiper.
+Le pipeline Kafka rejoue ce fichier cycle par cycle et publie une prédiction à
+chaque cycle. Seule la dernière prédiction de chaque moteur est comparable à
+la référence ; les précédentes n'ont pas de vérité terrain dans le jeu de
+test.
 
 ---
 
 ## 4. Format des fichiers
 
-Texte brut, **séparateur tabulation ou espace**, **aucune ligne d'en-tête**.
+Texte brut, **colonnes séparées par des espaces**, **aucune ligne d'en-tête**.
 
 ```
-1	1	0	0	0	8.5834		11.0		9.1933	...
-2	1	0	0	0	8.4952		11.0		9.1925	...
-1	2	0	0	0	8.5259		11.0		9.1812	...
+1 1 -0.0007 -0.0004 100.0 518.67 641.82 1589.70 1400.60 14.62 21.61 554.36 ...
+1 2 0.0019 -0.0003 100.0 518.67 642.15 1591.82 1403.14 14.62 21.61 553.75 ...
 ```
 
 Lecture :
@@ -117,51 +121,57 @@ pas d'en-tête, et un décalage fausserait silencieusement l'apprentissage.
 
 | # | Nom | Type | Description |
 | --- | --- | --- | --- |
-| 3 | `setting_1` | float | Réglage 1. Sur FD001 : constante. |
-| 4 | `setting_2` | float | Réglage 2. Sur FD001 : constante. |
-| 5 | `setting_3` | float | Réglage 3. Sur FD001 : constante. |
+| 3 | `setting_1` | float | Altitude. Sur FD001 : bruit entre −0,0087 et +0,0087. |
+| 4 | `setting_2` | float | Nombre de Mach. Sur FD001 : bruit entre −0,0006 et +0,0006. |
+| 5 | `setting_3` | float | Angle de la manette des gaz (TRA). Sur FD001 : constant à 100. |
 
-Sur FD002–FD004, ces trois colonnes encodent les six couples
-altitude/vitesse. Elles deviennent alors informatives, et la modélisation
-doit en tenir compte — notamment parce que la RUL dépend du régime.
+Sur FD001, `setting_1` et `setting_2` varient donc très légèrement : le
+notebook les conserve comme features, `setting_3` est écarté. Sur FD002 et
+FD004, ces trois colonnes encodent six régimes de vol. Elles deviennent alors
+réellement informatives, et la modélisation doit en tenir compte — les
+capteurs changent de niveau d'un régime à l'autre.
 
 ### 5.3 Capteurs
 
-21 capteurs, tous en `float`. Ils ne sont pas nommés dans le fichier d'origine ;
-`COLUMN_NAMES` dans `src/config.py` leur attribue les noms `sensor_1` à
-`sensor_21`, dans l'ordre.
+21 capteurs. Ils ne sont pas nommés dans le fichier d'origine ; `COLUMN_NAMES`
+dans `src/config.py` leur attribue les noms `sensor_1` à `sensor_21`, dans
+l'ordre. Les libellés et unités ci-dessous sont ceux de la publication NASA
+(*Damage Propagation Modeling*, Saxena et al., 2008), fournie avec l'archive :
 
-Le jeu de données d'origine ne fournit pas d'unité physique ni de fiche
-technique par capteur. Les noms ci-dessous sont des **libellés usuels** de la
-communauté C-MAPSS, à titre indicatif uniquement :
-
-| Capteur | Libellé usuel | Retenu sur FD001 |
-| --- | --- | --- |
-| `sensor_1` | Température d'entrée compresseur (fan) | Non — constante |
-| `sensor_2` | Température d'entrée compresseur (core) | Oui |
-| `sensor_3` | Température de sortie LPC | Oui |
-| `sensor_4` | Pression LPC entrante | Oui |
-| `sensor_5` | Pression LPC sortante | Oui |
-| `sensor_6` | Pression HPC entrante | Oui |
-| `sensor_7` | Pression HPC sortante | Oui |
-| `sensor_8` | Pression sortie physique | Oui |
-| `sensor_9` | Ratio de pression | Oui |
-| `sensor_10` | Température HPC | Non — constante |
-| `sensor_11` | Température sortie HPC | Oui |
-| `sensor_12` | Ratio de température | Oui |
-| `sensor_13` | Température LPC | Oui |
-| `sensor_14` | Chaleur massique HPC | Oui |
-| `sensor_15` | Débit HPC | Oui |
-| `sensor_16` | Ratio de débit | Oui |
-| `sensor_17` | Pression surround | Oui |
-| `sensor_18` | Température surround | Non — constante |
-| `sensor_19` | Température HPC surround | Non — constante |
-| `sensor_20` | Ratio de pression (2e étage) | Oui |
-| `sensor_21` | Température surround (2e étage) | Oui |
+| Capteur | Symbole | Grandeur | Unité | Retenu sur FD001 |
+| --- | --- | --- | --- | --- |
+| `sensor_1` | T2 | Température totale à l'entrée de la soufflante | °R | Non — constant |
+| `sensor_2` | T24 | Température totale en sortie du LPC | °R | Oui |
+| `sensor_3` | T30 | Température totale en sortie du HPC | °R | Oui |
+| `sensor_4` | T50 | Température totale en sortie de la LPT | °R | Oui |
+| `sensor_5` | P2 | Pression à l'entrée de la soufflante | psia | Oui (quasi constant) |
+| `sensor_6` | P15 | Pression totale dans le canal secondaire | psia | Oui |
+| `sensor_7` | P30 | Pression totale en sortie du HPC | psia | Oui |
+| `sensor_8` | Nf | Vitesse physique de la soufflante | tr/min | Oui |
+| `sensor_9` | Nc | Vitesse physique du corps haute pression | tr/min | Oui |
+| `sensor_10` | epr | Rapport de pression moteur (P50/P2) | — | Non — constant |
+| `sensor_11` | Ps30 | Pression statique en sortie du HPC | psia | Oui |
+| `sensor_12` | phi | Débit carburant rapporté à Ps30 | pps/psi | Oui |
+| `sensor_13` | NRf | Vitesse corrigée de la soufflante | tr/min | Oui |
+| `sensor_14` | NRc | Vitesse corrigée du corps haute pression | tr/min | Oui |
+| `sensor_15` | BPR | Taux de dilution | — | Oui |
+| `sensor_16` | farB | Richesse carburant/air de la chambre | — | Oui (quasi constant) |
+| `sensor_17` | htBleed | Enthalpie de prélèvement | — | Oui |
+| `sensor_18` | Nf_dmd | Vitesse de soufflante demandée | tr/min | Non — constant |
+| `sensor_19` | PCNfR_dmd | Vitesse corrigée de soufflante demandée | tr/min | Non — constant |
+| `sensor_20` | W31 | Débit d'air de refroidissement HPT | lbm/s | Oui |
+| `sensor_21` | W32 | Débit d'air de refroidissement LPT | lbm/s | Oui |
 
 **17 capteurs retenus, 4 retirés.** Sur FD001, les capteurs 1, 10, 18 et 19 ont
-une variance nulle et ne portent aucune information. Cette sélection est
-spécifique à FD001.
+une variance strictement nulle et sont retirés par le notebook. Cette sélection
+est spécifique à FD001.
+
+Les capteurs 5 et 16 ne prennent eux aussi qu'une seule valeur sur FD001, mais
+leur variance calculée vaut 1e-29 au lieu de 0 à cause des arrondis en virgule
+flottante : le test `variance == 0` les laisse passer. Ils sont donc conservés
+et génèrent 16 features sans information. Un test sur le nombre de valeurs
+distinctes les éliminerait, au prix d'un changement de la liste de features
+dans le notebook **et** dans `streaming/consumer.py`.
 
 ---
 
@@ -171,13 +181,13 @@ Sous-ensemble FD001 :
 
 | Fichier | Lignes | Taille |
 | --- | --- | --- |
-| `train_FD001.txt` | 20 615 | ≈ 3,5 Mo |
-| `test_FD001.txt` | 100 | ≈ 0,1 Mo |
-| `RUL_FD001.txt` | 100 | ≈ 0,5 Ko |
+| `train_FD001.txt` | 20 631 | ≈ 3,5 Mo |
+| `test_FD001.txt` | 13 096 | ≈ 2,2 Mo |
+| `RUL_FD001.txt` | 100 | ≈ 0,4 Ko |
 
-Soit 100 moteurs d'entraînement et 100 moteurs de test, tous de même
-génération. Les quatre sous-ensembles réunis pèsent ≈ 43 Mo, raison pour
-laquelle le répertoire `dataset/raw/` n'est pas versionné.
+Soit 100 moteurs d'entraînement (128 à 362 cycles chacun) et 100 moteurs de
+test (31 à 303 cycles). Les quatre sous-ensembles réunis pèsent ≈ 43 Mo, raison
+pour laquelle le répertoire `dataset/raw/` n'est pas versionné.
 
 ---
 
@@ -193,24 +203,27 @@ df["RUL"] = (
 )
 ```
 
-Pour `RUL_FD001.txt`, un moteur dont le dernier cycle observé est `T` suit une
-dégradation linéaire, de `T - 1` à `0` : le cycle de panne n'est pas observé et
-la dégradation est supposée totale au dernier relevé.
+Un moteur d'entraînement dont le dernier cycle est `T` a une RUL qui décroît
+linéairement de `T - 1` à `0`. Pour l'entraînement, cette cible est
+**plafonnée à 125 cycles** : en début de vie les capteurs ne portent aucun
+signe de dégradation, et 38,9 % des lignes ont une RUL supérieure à 125 que
+rien ne permet de distinguer. Voir [ARCHITECTURE.md](ARCHITECTURE.md),
+section 3.
 
-**Limite connue.** La RUL est ainsi parfaitement corrélée à `time_in_cycles` à
-l'intérieur d'un moteur. Cette régularité ne se retrouve pas sur un parc réel,
-où la dégradation présente du bruit et de la variabilité. Les résultats
-obtenus sur C-MAPSS constituent un **plancher**, pas une prévision de
-performance en production.
+**Limite connue.** C-MAPSS est une simulation : la dégradation y est régulière
+et tous les moteurs vont jusqu'à la panne. Sur un parc réel, les moteurs sont
+déposés avant la panne, les capteurs dérivent et les régimes changent. Les
+résultats obtenus ici ne sont pas une prévision de performance en production.
 
 ---
 
 ## 8. Répartition de la RUL de référence
 
-`RUL_FD001.txt` ne contient qu'une valeur par moteur, de 7 à 145 cycles. Cette
-distribution Guides l'interprétation des métriques : un modèle qui prédit
-systématiquement autour de la moyenne de la distribution peu distinguishera les
-moteurs authentiquement proches de la panne des autres.
+`RUL_FD001.txt` contient une valeur par moteur de test, de 7 à 145 cycles
+(moyenne 75,5 ; 11 moteurs au-dessus de 125). Cette distribution guide
+l'interprétation des métriques : un modèle qui prédit systématiquement autour
+de la moyenne obtient un score agrégé acceptable sans distinguer les moteurs
+réellement proches de la panne.
 
 C'est pourquoi l'évaluation ne se limite pas au score agrégé et examine
 explicitement les faibles RUL, là où une erreur a des conséquences

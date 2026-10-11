@@ -1,7 +1,7 @@
 # Maintenance — Maintenance prédictive par streaming
 
 Prédiction de la **durée de vie restante** (*Remaining Useful Life*, RUL) de
-moteurs a turbopropulseur à partir de mesures capteurs, avec un pipeline Kafka
+turboréacteurs double flux à partir de mesures capteurs, avec un pipeline Kafka
 qui ingère les mesures, calcule les features temporelles et publie une décision
 de maintenance par moteur.
 

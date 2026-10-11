@@ -59,7 +59,7 @@ le dictionnaire complet.
 | Catégorie | Colonnes | Traitement |
 | --- | --- | --- |
 | Identifiants | `unit_number`, `time_in_cycles` | `unit_number` sert au groupement, jamais comme feature |
-| Réglages | `setting_1..3` | Conservés s'ils varient, ignorés sur FD001 (mono-régime) |
+| Réglages | `setting_1..3` | Conservés s'ils varient : sur FD001, `setting_1` et `setting_2` (bruit infime), `setting_3` constant écarté |
 | Capteurs | `sensor_1..21` | 17 retenus, 4 constants retirés |
 
 ### Capteurs retirés
@@ -86,20 +86,43 @@ df["RUL"] = (
 ```
 
 Un moteur dont le dernier cycle observé est `T` a donc une RUL qui décroît
-linéairement de `T - 1` à `0`. Le cycle de panne n'est pas observé : la
-dégradation est supposée irréversible et totale au dernier relevé.
+linéairement de `T - 1` à `0` : en entraînement, chaque moteur est suivi
+jusqu'à la panne, et son dernier relevé porte la RUL `0`.
 
-Le fichier de test officiel ne contient que le **dernier état** de chaque moteur.
-Les cibles de référence sont dans `RUL_FD001.txt`, une RUL par moteur, dans
-l'ordre des `unit_number`.
+### Plafonnement de la cible
+
+Les modèles sont entraînés sur la RUL **plafonnée à 125 cycles** :
+
+```python
+RUL_CAP = 125
+df["RUL_capped"] = df["RUL"].clip(upper=RUL_CAP)
+```
+
+En début de vie, les capteurs ne montrent aucune dégradation : un moteur à 300
+cycles de la panne et un moteur à 150 cycles ont les mêmes mesures. Sans
+plafond, 38,9 % des lignes d'entraînement portent une RUL supérieure à 125 que
+rien ne permet de prédire, et le modèle apprend à surestimer. Avec le plafond,
+il apprend « moteur sain » au-delà de 125 cycles et se concentre sur la phase
+de dégradation, la seule qui pilote une décision.
+
+Conséquence : le modèle ne prédit jamais plus de 125 cycles. C'est sans effet
+sur les décisions, dont le seuil le plus haut est à 50 cycles.
+
+### Jeu de test
+
+Le fichier de test officiel contient l'historique de chaque moteur jusqu'à un
+cycle antérieur à la panne. L'évaluation porte sur la prédiction au **dernier
+cycle observé** de chaque moteur. Les cibles de référence sont dans
+`RUL_FD001.txt`, une RUL par moteur, dans l'ordre des `unit_number`.
 
 ---
 
 ## 4. Ingénierie des features
 
 Pour chacun des 17 capteurs retenus, huit colonnes sont produites, soit
-**136 features** au total, auxquelles s'ajoutent les colonnes d'identification
-pour 155 entrées dans le vecteur final.
+**136 features dérivées**. S'y ajoutent les 17 mesures brutes et les 2 réglages
+variables (`setting_1`, `setting_2`), pour **155 entrées** dans le vecteur
+final. Les identifiants n'en font pas partie.
 
 | Suffixe | Définition | Fenêtre |
 | --- | --- | --- |
@@ -125,7 +148,7 @@ for window in (5, 10, 20):
 
 ### Causalité
 
-Toutes les fenêtres glissantes sont **strictment causales** : une statistique au
+Toutes les fenêtres glissantes sont **strictement causales** : une statistique au
 cycle `t` ne dépend que des cycles `≤ t`. C'est la condition pour que le modèle
 soit déployable en flux. Une version non causale donnerait de meilleurs scores
 en validation, et serait inutilisable en production.
@@ -156,7 +179,7 @@ le débit de messages traités.
 
 **Random Forest Regressor**, choisi pour trois raisons :
 
-- **Pas de mise à l'échelle nécessaire.** Les arbres decisionnent sur des
+- **Pas de mise à l'échelle nécessaire.** Les arbres décident sur des
   comparaisons de seuils ; standardiser les variables n'apporte rien. Si un
   modèle sensible à l'échelle est introduit plus tard, son scaler doit être
   ajusté sur les seuls moteurs d'entraînement, jamais sur l'ensemble.
@@ -176,7 +199,7 @@ GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
 Le découpage se fait **par moteur entier**, jamais par ligne. Un découpage
 aléatoire par ligne placerait des cycles d'un même moteur en entraînement et en
 validation : le modèle reconnaîtrait la signature d'un moteur plutôt que son
-profil de dégradation, et le score serait irreproductible. `unit_number` est
+profil de dégradation, et le score de validation serait trop optimiste. `unit_number` est
 donc une clé de groupement, jamais une feature — le notebook l'affirme
 explicitement :
 
@@ -190,19 +213,35 @@ assert "unit_number" not in FEATURE_COLUMNS
 
 ### Score NASA asymétrique
 
-Le score officiel pénalise différemment selon le sens de l'erreur :
+Le score officiel pénalise différemment selon le sens de l'erreur
+`d = RUL prédite − RUL réelle` :
 
 ```python
 def nasa_asymmetric_score(y_true, y_pred):
     error = np.asarray(y_pred) - np.asarray(y_true)
-    penalties = np.where(error >= 0, 5.0, 10.0)
-    return float(np.mean(penalties * error**2))
+    penalties = np.where(
+        error < 0,
+        np.exp(-error / 13) - 1,   # sous-estimation
+        np.exp(error / 10) - 1,    # surestimation
+    )
+    return float(penalties.sum())
 ```
 
-Une **surestimation** de la RUL coûte 5 fois plus qu'une sous-estimation de
-même amplitude. Surestimer revient à maintenir en service un moteur qui va
-défaillir ; sous-estimer conduit à une intervention prématurée, moins grave.
-Le score est d'abord minimisé, et non maximisé.
+La pénalité est **exponentielle** et croît plus vite pour une
+**surestimation** (diviseur 10) que pour une sous-estimation (diviseur 13) :
+une erreur de +30 cycles coûte 19,1, une erreur de −30 cycles coûte 9,0.
+Surestimer revient à maintenir en service un moteur qui va défaillir ;
+sous-estimer conduit à une intervention prématurée, moins grave.
+
+Deux conséquences pour la lecture du score :
+
+- c'est une **somme**, pas une moyenne : il n'est comparable qu'entre jeux de
+  même taille (100 moteurs pour le test officiel) ;
+- il est dominé par les quelques plus grosses erreurs. Une seule surestimation
+  de 100 cycles pèse 22 000 points. Il se lit donc toujours avec le MAE et le
+  RMSE.
+
+Plus le score est faible, meilleur est le modèle.
 
 ### Analyses complémentaires
 
@@ -215,7 +254,7 @@ pannes ratées :
   uniforme, les faibles RUL étant les plus difficiles et les plus importantes.
 - **Matrice de confusion métier** : les quatre décisions de maintenance
   confrontées, pour mesurer combien de situations *Critique* réelles ont été
-  classées *Inspection planifiée*. Ce sont les faux négatifs costly.
+  classées *Inspection planifiée*. Ce sont les faux négatifs coûteux.
 - **Pannes critiques manquées** : la liste explicite des cas
   `RUL_réelle ≤ 20` et `RUL_prédite > 20`.
 
@@ -228,7 +267,8 @@ Chaque `.joblib` est un dictionnaire :
 ```python
 {
     "model": RandomForestRegressor(...),
-    "feature_columns": ["sensor_2_delta", "sensor_2_from_baseline", ...],
+    "feature_columns": ["sensor_2", ..., "setting_1", "setting_2", "sensor_2_delta", ...],
+    "rul_cap": 125,   # modèle de RUL uniquement
     ...
 }
 ```
@@ -269,7 +309,7 @@ Par ordre de rendement décroissant, pour un passage en production :
    redondantes. Une sélection par importance ou par élimination récursive
    réduirait la latence et la taille du modèle sans perte de précision.
 
-5. **Suivi de dérive.** Le jeu C-MAPSS est stable et de période 2000. En
+5. **Suivi de dérive.** Le jeu C-MAPSS est une simulation figée, publiée en 2008. En
    production, les capteurs dérivent : un suivi de la distribution des features
    et une alerte sur son écart à la distribution d'entraînement sont
    nécessaires.

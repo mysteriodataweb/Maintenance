@@ -54,20 +54,22 @@ que son état incrémental reste cohérent.
 
 ```json
 {
-  "unit_number": 7,
-  "time_in_cycles": 143,
-  "setting_1": 0.0,
-  "setting_2": 0.0,
-  "setting_3": 0.0,
-  "sensor_1": 9.4836,
-  "sensor_2": 11.32,
-  "sensor_3": 6.4771,
+  "unit_number": 1.0,
+  "time_in_cycles": 1.0,
+  "setting_1": -0.0007,
+  "setting_2": -0.0004,
+  "setting_3": 100.0,
+  "sensor_1": 518.67,
+  "sensor_2": 641.82,
+  "sensor_3": 1589.7,
   "...": "..."
 }
 ```
 
 Les 26 colonnes de C-MAPSS, noms standardisés par `src/config.py`. Chaque
-valeur est un nombre ; le désérialiseur fait un `json.loads` direct.
+valeur est un nombre ; le désérialiseur fait un `json.loads` direct. Les
+identifiants partent en flottant (`1.0`), parce que le producteur sérialise une
+ligne pandas entière ; le consumer les reconvertit en entier.
 
 ---
 
@@ -91,7 +93,7 @@ Une prédiction par moteur et par cycle traité.
 | --- | --- | --- |
 | `unit_number` | int | Moteur concerné |
 | `cycle` | int | Cycle d'origine de la prédiction |
-| `predicted_rul` | float | RUL prédite, arrondie à 2 décimales, jamais négative |
+| `predicted_rul` | float | RUL prédite, arrondie à 2 décimales, entre 0 et 125 (cible plafonnée à l'entraînement) |
 | `decision` | string | Décision de maintenance déduite des seuils |
 | `history_size` | int | Nombre de cycles accumulés pour ce moteur |
 
@@ -158,6 +160,13 @@ de 20 cycles est cette garantie minimale.
 - **Au redémarrage, tout est perdu.** Chaque moteur doit réaccumuler 20 cycles
   avant sa première prédiction. Pour un déploiement durable, brancher un store
   de séries temporelles (Redis, InfluxDB, TimescaleDB).
+- **Après un redémarrage, les prédictions sont faussées sans erreur.** Les
+  offsets étant commités, le consumer reprend au milieu de la vie des moteurs.
+  Les features `_from_baseline` prennent alors pour référence le premier
+  message reçu après la reprise, et non le vrai premier cycle du moteur : le
+  modèle reçoit le profil d'un moteur « neuf » alors qu'il est déjà dégradé,
+  ce qui pousse vers une surestimation de la RUL. Tant que l'historique n'est pas persisté, la seule reprise correcte est
+  un rejeu complet du topic avec un nouveau `group_id`.
 - **Le consumer n'est pas partageable.** Deux instances lisant le même
   `group_id` se partagent les partitions, donc chaque moteur est traité par une
   seule instance — c'est correct. Mais deux consumer sur des `group_id`
@@ -181,9 +190,10 @@ Changer `MAINTENANCE_CONSUMER_GROUP` provoque un rejeu complet et une rafale de
 prédictions sur des données déjà traitées. En choisir un nouveau, vider d'abord
 le topic.
 
-**Limite à connaître :** l'offset est commité après le traitement, jamais avant.
-Si le consumer tombe entre la prédiction et le commit, le message est rejoué et
-la prédiction republiée. Les consommateurs aval doivent donc être **idempotents**,
+**Limite à connaître :** avec `enable_auto_commit=True`, les offsets sont
+commités périodiquement en arrière-plan, sans lien avec la fin du traitement
+d'un message. Si le consumer tombe entre deux commits, les derniers messages
+sont rejoués et leurs prédictions republiées. Les consommateurs aval doivent donc être **idempotents**,
 par exemple sur la clé `(unit_number, cycle)`.
 
 ---

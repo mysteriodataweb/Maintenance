@@ -24,8 +24,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import config  # noqa: E402
 
-#: Fichier de test diffuse. Le jeu de test ne contient que l'etat final de
-#: chaque moteur, ce qui permet de reproduire les conditions du test officiel.
+#: Fichier de test diffuse. Il contient l'historique de chaque moteur jusqu'a
+#: un cycle anterieur a la panne : seule la prediction du dernier cycle de
+#: chaque moteur est comparable a la reference RUL_<DATASET_ID>.txt.
 DATASET_PATH = os.path.join(
     config.RAW_DATA_DIR,
     f"test_{config.DATASET_ID}.txt",
